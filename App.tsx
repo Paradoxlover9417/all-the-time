@@ -1128,11 +1128,13 @@ function Splash({ ready }: { ready: boolean }) {
 type PickerReq = { key: string; label: string; mode: 'date' | 'time'; value: string; onChange: (v: string) => void };
 let setPicker: (r: PickerReq | null) => void = () => {};
 const closePicker = () => setPicker(null);
+const pickerWatchers = new Set<(open: boolean) => void>(); // pages that make room for the sheet
 
 function PickerHost() {
   const [req, setReq] = useState<PickerReq | null>(null);
   setPicker = setReq;
   useEffect(() => {
+    pickerWatchers.forEach((w) => w(!!req));
     if (!req) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => (setReq(null), true));
     return () => sub.remove();
@@ -1179,9 +1181,15 @@ function PickerHost() {
 // Page body for screens with pickers: empty-space taps close the sheet; extra bottom room so
 // fields near the end can scroll above it.
 function PageWrap({ children }: { children: React.ReactNode }) {
+  // Extra bottom room only while the picker sheet is up, so fields near the end can scroll above it.
+  const [sheet, setSheet] = useState(false);
+  useEffect(() => {
+    pickerWatchers.add(setSheet);
+    return () => void pickerWatchers.delete(setSheet);
+  }, []);
   return (
     <ScrollView contentContainerStyle={{ flexGrow: 1 }} keyboardShouldPersistTaps="handled">
-      <Pressable style={[s.page, { flexGrow: 1, paddingBottom: 320 }]} onPress={closePicker}>
+      <Pressable style={[s.page, { flexGrow: 1, paddingBottom: sheet ? 320 : 20 }]} onPress={closePicker}>
         {children}
       </Pressable>
     </ScrollView>
