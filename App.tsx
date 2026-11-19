@@ -116,8 +116,7 @@ const SAMPLE: Prayer[] = [
     answer: { date: '2026-07-01', text: '원하던 회사에 합격했다.' },
   },
 ];
-const deviceLang: Lang = Intl.DateTimeFormat().resolvedOptions().locale.startsWith('ko') ? 'ko' : 'en';
-const DEFAULTS: Settings = { times: ['07:00', '12:00', '21:00'], minutes: 5, lang: deviceLang, dateFmt: 'ymd', sounds: [], musicAt: 'end', remind: true, endAlert: false, theme: 'system' };
+const DEFAULTS: Settings = { times: ['07:00', '12:00', '21:00'], minutes: 5, lang: 'ko', dateFmt: 'ymd', sounds: [], musicAt: 'end', remind: true, endAlert: false, theme: 'light' };
 const native = Platform.OS !== 'web';
 
 // Delete confirmation; Alert buttons are a no-op on web.
@@ -260,7 +259,7 @@ export default function App() {
     back();
   };
   const icons = () => (
-    <View style={[s.row, { gap: 18 }]}>
+    <View style={[s.row, { gap: 18, paddingRight: native ? 0 : 16 }]}>
       <IconBtn name="calendar-outline" onPress={() => go({ name: 'calendar' })} />
       <IconBtn name="settings-outline" onPress={() => go({ name: 'settings' })} />
     </View>
