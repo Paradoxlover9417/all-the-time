@@ -10,6 +10,8 @@ import * as SystemUI from 'expo-system-ui';
 import * as DocumentPicker from 'expo-document-picker';
 import { AudioPlayer, createAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
+import { File, Paths } from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 
 type Lang = 'en' | 'ko';
 type Note = { id: string; at: string; text: string }; // at: 'YYYY-MM-DD HH:MM'
@@ -42,6 +44,7 @@ const STR = {
     slot: (i: number, n: number) => `Prayer ${i} of ${n}`, start: 'Start', resume: 'Resume', pause: 'Pause', reset: 'Reset',
     prayThese: 'Pray for these now', addFirst: 'Add prayers first.', last: 'Last',
     times: 'Prayer times', reminders: 'Reminders', theme: 'Appearance', system: 'System', light: 'Light', dark: 'Dark', quick: 'Quick', quickHint: 'Quick prayer: write what is on your heart now', toList: '+ Add to prayer list', quickSend: 'Pray', noQuick: 'No quick prayers yet.', endAlert: 'Alert when time is up', prayer: (i: number) => `Prayer ${i}`, minutes: 'Length', min: (n: number) => `${n} min`, general: 'General',
+    backup: 'Backup', exportData: 'Save backup file', importData: 'Restore from backup', backupHint: 'Music files are not included. Save a backup before reinstalling or switching phones.', restoreQ: 'Replace current data with this backup?', restore: 'Restore', badFile: 'This is not a valid backup file.',
     musicList: 'Music list', addMusic: '+ Add music', music: 'Music', musicAt: 'Play', noSound: 'None',
     atStart: 'From the start', atEnd: (n: number) => `After ${n} min`, finish: 'Finish',
     language: 'Language', dateFmt: 'Date format', calendar: 'Calendar', week: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
@@ -59,6 +62,7 @@ const STR = {
     slot: (i: number, n: number) => `오늘의 기도 ${i}/${n}`, start: '시작', resume: '계속', pause: '일시정지', reset: '처음부터',
     prayThese: '이번 시간에 기도할 제목', addFirst: '먼저 기도제목을 추가하세요.', last: '최근',
     times: '기도 시간', reminders: '알림', theme: '화면 모드', system: '시스템', light: '라이트', dark: '다크', quick: '짧은 기도', quickHint: '짧은 기도 : 지금 마음을 기도로 적어보세요', toList: '+ 기도 목록에 추가', quickSend: '기도 남기기', noQuick: '아직 짧은 기도가 없어요.', endAlert: '기도 시간 끝 알림', prayer: (i: number) => `기도 ${i}`, minutes: '한 번 기도 시간', min: (n: number) => `${n}분`, general: '일반',
+    backup: '백업', exportData: '백업 파일 저장', importData: '백업 불러오기', backupHint: '음악 파일은 포함되지 않아요. 앱을 다시 설치하거나 폰을 바꾸기 전에 백업해두세요.', restoreQ: '지금 데이터를 백업 내용으로 바꿀까요?', restore: '불러오기', badFile: '백업 파일이 아니에요.',
     musicList: '음악 목록', addMusic: '+ 음악 추가', music: '음악', musicAt: '재생 시점', noSound: '없음',
     atStart: '처음부터', atEnd: (n: number) => `${n}분 후`, finish: '마치기',
     language: '언어', dateFmt: '날짜 표시', calendar: '달력', week: ['일', '월', '화', '수', '목', '금', '토'],
@@ -119,14 +123,53 @@ const SAMPLE: Prayer[] = [
 const DEFAULTS: Settings = { times: ['07:00', '12:00', '21:00'], minutes: 5, lang: 'ko', dateFmt: 'ymd', sounds: [], musicAt: 'end', remind: true, endAlert: false, theme: 'light' };
 const native = Platform.OS !== 'web';
 
-// Delete confirmation; Alert buttons are a no-op on web.
-const confirmDel = (onYes: () => void) => {
-  if (!native) return void (window.confirm(t.delQ) && onYes());
-  Alert.alert(t.delQ, '', [
+// Confirmation dialog; Alert buttons are a no-op on web.
+const ask = (q: string, yes: string, onYes: () => void) => {
+  if (!native) return void (window.confirm(q) && onYes());
+  Alert.alert(q, '', [
     { text: t.cancel, style: 'cancel' },
-    { text: t.delete, style: 'destructive', onPress: onYes },
+    { text: yes, style: 'destructive', onPress: onYes },
   ]);
 };
+const confirmDel = (onYes: () => void) => ask(t.delQ, t.delete, onYes);
+const notify = (msg: string) => (native ? Alert.alert(msg) : window.alert(msg));
+
+type Backup = { app: 'all-the-time'; version: 1; exportedAt: string; prayers: Prayer[]; notes: Note[]; log: string[]; settings: Settings };
+
+// Saves everything to a JSON file the user keeps (Files app, Drive, chat…). Music uris are device-local, so they're left out.
+async function exportBackup(data: Omit<Backup, 'app' | 'version' | 'exportedAt'>) {
+  const backup: Backup = { app: 'all-the-time', version: 1, exportedAt: new Date().toISOString(), ...data, settings: { ...data.settings, sounds: [], music: undefined } };
+  const json = JSON.stringify(backup);
+  const name = `all-the-time-${today()}.json`;
+  if (native) {
+    const file = new File(Paths.cache, name);
+    if (file.exists) file.delete();
+    file.create();
+    await file.write(json);
+    await Sharing.shareAsync(file.uri, { mimeType: 'application/json', UTI: 'public.json' });
+    return;
+  }
+  const f = new window.File([json], name, { type: 'application/json' });
+  // iOS home-screen apps can't download, but can hand the file to the share sheet ("Save to Files").
+  if (navigator.canShare?.({ files: [f] })) return navigator.share({ files: [f] }).catch(() => {});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(f);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+async function pickBackup(): Promise<Backup | undefined> {
+  const r = await DocumentPicker.getDocumentAsync({ type: native ? ['application/json', 'text/plain', '*/*'] : '*/*', copyToCacheDirectory: true });
+  if (r.canceled) return;
+  const x = r.assets[0];
+  try {
+    const text = !native && x.file ? await x.file.text() : await new File(x.uri).text();
+    const b = JSON.parse(text);
+    if (b?.app === 'all-the-time' && Array.isArray(b.prayers)) return b;
+  } catch {}
+  notify(t.badFile);
+}
 
 // Web: picked files only live as blob URLs, so keep them in IndexedDB under 'idb:<id>' uris.
 const idb = (mode: IDBTransactionMode) =>
@@ -331,6 +374,20 @@ export default function App() {
               initial={settings}
               onSave={setSettings}
               onBack={back}
+              onExport={() => exportBackup({ prayers, notes, log, settings })}
+              onImport={async () => {
+                const b = await pickBackup();
+                if (!b) return;
+                return new Promise<Settings | undefined>((done) =>
+                  ask(t.restoreQ, t.restore, () => {
+                    setPrayers(b.prayers);
+                    setNotes(b.notes ?? []);
+                    setLog(b.log ?? []);
+                    // Keep this device's music list; backups don't carry the files.
+                    done({ ...DEFAULTS, ...b.settings, sounds: settings.sounds, music: settings.music });
+                  }),
+                );
+              }}
               onSample={() => {
                 setPrayers((ps) => [...SAMPLE, ...ps.filter((p) => !p.id.startsWith('sample'))]);
                 setLog(sampleLog());
@@ -788,11 +845,13 @@ function CalendarScreen({ prayers, notes, log, perDay, onBack }: {
   );
 }
 
-function SettingsScreen({ initial, onSave, onBack, onSample }: {
+function SettingsScreen({ initial, onSave, onBack, onSample, onExport, onImport }: {
   initial: Settings;
   onSave: (s: Settings) => void;
   onBack: () => void;
   onSample: () => void;
+  onExport: () => void;
+  onImport: () => Promise<Settings | undefined>;
 }) {
   const [v, setV] = useState(initial);
   // Auto-apply every change; times are sorted when leaving so rows don't jump while editing.
@@ -904,6 +963,23 @@ function SettingsScreen({ initial, onSave, onBack, onSample }: {
           <Text style={s.link}>{t.addMusic}</Text>
         </Pressable>
       </View>
+
+      <Text style={s.groupTitle}>{t.backup}</Text>
+      <View style={s.group}>
+        <Pressable style={s.item} onPress={onExport}>
+          <Text style={s.link}>{t.exportData}</Text>
+        </Pressable>
+        <Pressable
+          style={s.item}
+          onPress={async () => {
+            const next = await onImport();
+            if (next) setV(next); // settings screen owns the settings while open
+          }}
+        >
+          <Text style={s.link}>{t.importData}</Text>
+        </Pressable>
+      </View>
+      <Text style={[s.muted, { marginLeft: 4, marginTop: -4 }]}>{t.backupHint}</Text>
 
       {__DEV__ && <Btn label="Load sample data" small onPress={onSample} />}
     </PageWrap>

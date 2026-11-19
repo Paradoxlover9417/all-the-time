@@ -24,7 +24,8 @@
       "name": "All The Time"
     },
     "plugins": [
-      "expo-audio"
+      "expo-audio",
+      "expo-sharing"
     ],
     "experiments": {
       "baseUrl": "/all-the-time"
